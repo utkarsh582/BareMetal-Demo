@@ -40,7 +40,7 @@ int strlen(const char* s);
 #define TCP_FIN 1
 
 /* Global variables */
-u8 src_MAC[6] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+u8 src_MAC[6] = {0x08, 0x00, 0x27, 0x2D, 0xDE, 0x1F};
 u8 dst_MAC[6] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 u8 dst_broadcast[6] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
 u8 src_IP[4] = {0, 0, 0, 0};
@@ -147,7 +147,7 @@ const char webpage[] =
 "\t\t</div>\n"
 "\t</body>\n"
 "</html>\n";
-const char version_string[] = "\nminIP v0.7.0 (2023 11 11)\nListening on 192.168.4.250...\n";
+const char version_string[] = "\nminIP v0.7.0 (2023 11 11)\nListening on 10.13.100.50...\n";
 const char arp[] = "arp\n";
 const char ipv4[] = "ipv4\n";
 const char ping[] = "ping\n";
@@ -156,18 +156,18 @@ const char ping[] = "ping\n";
 int main()
 {
 	b_output(version_string, (unsigned long)strlen(version_string));
-	src_IP[0] = 192;
-	src_IP[1] = 168;
-	src_IP[2] = 4;
-	src_IP[3] = 250;
+	src_IP[0] = 10;
+	src_IP[1] = 13;
+	src_IP[2] = 100;
+	src_IP[3] = 50;
 	src_SN[0] = 255;
 	src_SN[1] = 255;
 	src_SN[2] = 255;
 	src_SN[3] = 0;
-	src_GW[0] = 192;
-	src_GW[1] = 168;
-	src_GW[2] = 4;
-	src_GW[3] = 1;
+	src_GW[0] = 10;
+	src_GW[1] = 13;
+	src_GW[2] = 100;
+	src_GW[3] = 255;
 	net_init();
 
 	while(running == 1)
@@ -183,7 +183,7 @@ int main()
 				arp_packet* rx_arp = (arp_packet*)buffer;
 				if (swap16(rx_arp->opcode) == ARP_REQUEST)
 				{
-					b_output(arp, (unsigned long)strlen(arp));
+					// b_output(arp, (unsigned long)strlen(arp));
 					if (*(u32*)rx_arp->target_ip == *(u32*)src_IP)
 					{
 						arp_packet* tx_arp = (arp_packet*)tosend;
@@ -269,6 +269,8 @@ int main()
 					if (rx_tcp->flags == TCP_SYN)
 					{
 //						printf(" - SYN");
+						b_output("SYN\n", (unsigned long)strlen("SYN\n"));
+						// b_output(rx_tcp->ipv4.src_ip, (unsigned long)strlen(rx_tcp->ipv4.src_ip));
 						tcp_packet* tx_tcp = (tcp_packet*)tosend;
 						memcpy((void*)tosend, (void*)buffer, ETH_FRAME_LEN); // make a copy of the original frame
 						// Ethernet
@@ -303,12 +305,18 @@ int main()
 					}
 					else if (rx_tcp->flags == TCP_ACK)
 					{
+						b_output("ACK Flag\n",(unsigned long)strlen("ACK Flag\n"));
 //						printf(" - ACK");
 						// Ignore these for now.
 					}
 					else if (rx_tcp->flags == (TCP_PSH|TCP_ACK))
 					{
 //						printf(" - PSH");
+						b_output("PSH\n", (unsigned long)strlen("PSH\n"));
+					
+						char* message = (char*)rx_tcp + sizeof(tcp_packet);
+						b_output(message,(unsigned long)strlen(message));
+
 						tcp_packet* tx_tcp = (tcp_packet*)tosend;
 						memcpy((void*)tosend, (void*)buffer, ETH_FRAME_LEN); // make a copy of the original frame
 						// Ethernet
@@ -318,7 +326,7 @@ int main()
 						// IPv4
 						tx_tcp->ipv4.version = rx_tcp->ipv4.version;
 						tx_tcp->ipv4.dsf = rx_tcp->ipv4.dsf;
-						tx_tcp->ipv4.total_length = swap16(52);
+						tx_tcp->ipv4.total_length = rx_tcp->ipv4.total_length;
 						tx_tcp->ipv4.id = rx_tcp->ipv4.id;
 						tx_tcp->ipv4.flags = rx_tcp->ipv4.flags;
 						tx_tcp->ipv4.ttl = rx_tcp->ipv4.ttl;
@@ -333,15 +341,15 @@ int main()
 						tx_tcp->seqnum = rx_tcp->seqnum;
 						tx_tcp->acknum = swap32(swap32(rx_tcp->seqnum)+(recv_packet_len-14-20-32)); // Add the bytes received
 						tx_tcp->data_offset = rx_tcp->data_offset;
-						tx_tcp->flags = TCP_ACK;
+						// tx_tcp->flags = TCP_ACK;
 						tx_tcp->window = rx_tcp->window;
 						tx_tcp->checksum = 0;
 						tx_tcp->urg_pointer = rx_tcp->urg_pointer;
 						tx_tcp->checksum = checksum_tcp(&tosend[34], 32, PROTOCOL_IP_TCP, 32);
 						// Send the reply
-						net_send(tosend, 66);
+						// net_send(tosend, 66);
 						// Send the webpage
-						tx_tcp->ipv4.total_length = swap16(52+strlen(webpage));
+						// tx_tcp->ipv4.total_length = swap16(52+strlen(webpage));
 						tx_tcp->ipv4.checksum = 0;
 						tx_tcp->ipv4.checksum = checksum(&tosend[14], 20);
 						tx_tcp->flags = TCP_PSH|TCP_ACK;
@@ -350,18 +358,19 @@ int main()
 						tx_tcp->checksum = checksum_tcp(&tosend[34], 32+strlen(webpage), PROTOCOL_IP_TCP, 32+strlen(webpage));
 						net_send(tosend, 66+strlen(webpage));
 						// Disconnect the client
-						tx_tcp->ipv4.total_length = swap16(52);
-						tx_tcp->ipv4.checksum = 0;
-						tx_tcp->ipv4.checksum = checksum(&tosend[14], 20);
-						tx_tcp->seqnum = swap32(swap32(tx_tcp->seqnum)+strlen(webpage));
-						tx_tcp->flags = TCP_FIN|TCP_ACK;
-						tx_tcp->checksum = 0;
-						tx_tcp->checksum = checksum_tcp(&tosend[34], 32, PROTOCOL_IP_TCP, 32);
-						net_send(tosend, 66);
+						// tx_tcp->ipv4.total_length = swap16(52);
+						// tx_tcp->ipv4.checksum = 0;
+						// tx_tcp->ipv4.checksum = checksum(&tosend[14], 20);
+						// tx_tcp->seqnum = swap32(swap32(tx_tcp->seqnum)+strlen(webpage));
+						// tx_tcp->flags = TCP_FIN|TCP_ACK;
+						// tx_tcp->checksum = 0;
+						// tx_tcp->checksum = checksum_tcp(&tosend[34], 32, PROTOCOL_IP_TCP, 32);
+						// net_send(tosend, 66);
 					}
 					else if (rx_tcp->flags == (TCP_FIN|TCP_ACK))
 					{
 //						printf(" - FIN");
+						b_output("FIN\n", (unsigned long)strlen("FIN\n"));
 						tcp_packet* tx_tcp = (tcp_packet*)tosend;
 						memcpy((void*)tosend, (void*)buffer, ETH_FRAME_LEN); // make a copy of the original frame
 						// Ethernet
