@@ -95,34 +95,127 @@ typedef struct tcp_packet {
     u16 urg_pointer;
 } tcp_packet;
 
+//Construction and Sending of ARP Request Packet
+void send_arp_request(u8* dest_ip, u8* dest_mac, u8* src_mac, u8* src_ip, u8* tosend) {
+    arp_packet* tx_arp = (arp_packet*)tosend;
+
+    // Ethernet header
+    memcpy(tx_arp->ethernet.dest_mac, dest_mac, 6);
+    memcpy(tx_arp->ethernet.src_mac, src_mac, 6);
+    tx_arp->ethernet.type = swap16(ETHERTYPE_ARP);
+
+    // ARP packet
+    tx_arp->hardware_type = swap16(1); // Ethernet
+    tx_arp->protocol = swap16(ETHERTYPE_IPv4);
+    tx_arp->hardware_size = 6;
+    tx_arp->protocol_size = 4;
+    tx_arp->opcode = swap16(ARP_REQUEST);
+    memcpy(tx_arp->sender_mac, src_mac, 6);
+    memcpy(tx_arp->sender_ip, src_ip, 4);
+    memcpy(tx_arp->target_ip, dest_ip, 4);
+
+    // Send the ARP request
+    net_send(tosend, 42);
+}
+
+//Construction of Pseudo Header for TCP Checksum
+void create_pseudo_header(char *pseudo_header, u8 *src_ip, u8 *dst_ip, u8 tcp_len) {
+    memcpy(pseudo_header, src_ip, 4);        // Source IP (4 bytes)
+    memcpy(pseudo_header + 4, dst_ip, 4);    // Destination IP (4 bytes)
+    pseudo_header[8] = 0;                    // Zero byte - Fixed Byte
+    pseudo_header[9] = PROTOCOL_IP_TCP;      // Protocol (TCP)
+    pseudo_header[10] = (u8)(tcp_len >> 8);  // TCP Length (high byte)
+    pseudo_header[11] = (u8)(tcp_len & 0xFF); // TCP Length (low byte)
+}
+
+
+// Function to fill in the common TCP header fields
+void build_tcp_header(tcp_packet *tx_tcp, u8 *src_ip, u8 *dst_ip, u16 ipv4_total_length ,u16 src_port, u16 dest_port,
+                      uint32_t seq_num, uint32_t ack_num, uint8_t flags, u16 window_size, u8 *options, u8 option_len) {
+    memset(tx_tcp, 0, sizeof(tcp_packet));
+
+    // Ethernet header
+    memcpy(tx_tcp->ipv4.ethernet.dest_mac, dst_MAC, 6);
+    memcpy(tx_tcp->ipv4.ethernet.src_mac, src_MAC, 6);
+    tx_tcp->ipv4.ethernet.type = swap16(ETHERTYPE_IPv4);
+
+    // IPv4 header
+    tx_tcp->ipv4.version = 4 << 4 | 5;
+    tx_tcp->ipv4.ttl = 64;
+    tx_tcp->ipv4.protocol = PROTOCOL_IP_TCP;
+    memcpy(tx_tcp->ipv4.src_ip, src_ip, 4);
+    memcpy(tx_tcp->ipv4.dest_ip, dst_ip, 4);
+
+    tx_tcp->ipv4.total_length = swap16(ipv4_total_length + option_len);  // IP + TCP + options
+    tx_tcp->ipv4.checksum = 0;
+    tx_tcp->ipv4.checksum = checksum((u8*)&tx_tcp->ipv4 + sizeof(eth_header), sizeof(ipv4_packet) - sizeof(eth_header));
+
+    // TCP header
+    tx_tcp->src_port = src_port;
+    tx_tcp->dest_port = dest_port;
+    tx_tcp->seqnum = swap32(seq_num);
+    tx_tcp->acknum = swap32(ack_num + 1);
+    tx_tcp->data_offset = (5 + (option_len/4)) << 4; // Data offset (header length)
+    tx_tcp->flags = flags;
+    tx_tcp->window = swap16(window_size);
+    tx_tcp->checksum = 0; // Will calculate after adding options
+    tx_tcp->urg_pointer = 0;
+
+    // Copy options if any
+    if (option_len > 0) {
+        memcpy((u8*)tx_tcp + sizeof(tcp_packet), options, option_len);
+    }
+}
+
+//Construction and Sending of SYN packet to send connection request to server
+// Function to handle the SYN packet construction and sending
+void send_syn_packet(u8 *tosend, u8 *src_ip, u8 *dst_ip, u16 dest_port) {
+    u8 tcp_options[20];
+    u8 option_len = 0;
+
+    // Define TCP options (these could be combined or extended based on need)
+    u8 mss_option[] = {0x02, 0x04, 0x05, 0xb4};  // MSS: 1460 bytes
+    u8 sack_permitted[] = {0x04, 0x02};          // SACK Permitted
+    u8 timestamp_option[] = {0x08, 0x0A, 0x22, 0x45, 0x0E, 0x56, 0x00, 0x00, 0x00, 0x00};  // Timestamps
+    u8 nop_option[] = {0x01};                     // NOP
+    u8 window_scale_option[] = {0x03, 0x03, 0x07}; // Window Scale: 7
+
+    // Concatenate options
+    memcpy(tcp_options + option_len, mss_option, sizeof(mss_option)); option_len += sizeof(mss_option);
+    memcpy(tcp_options + option_len, sack_permitted, sizeof(sack_permitted)); option_len += sizeof(sack_permitted);
+    memcpy(tcp_options + option_len, timestamp_option, sizeof(timestamp_option)); option_len += sizeof(timestamp_option);
+    memcpy(tcp_options + option_len, nop_option, sizeof(nop_option)); option_len += sizeof(nop_option);
+    memcpy(tcp_options + option_len, window_scale_option, sizeof(window_scale_option)); option_len += sizeof(window_scale_option);
+
+    // TCP packet
+    tcp_packet* tx_tcp = (tcp_packet*)tosend;
+    build_tcp_header(tx_tcp, src_ip, dst_ip, sizeof(tcp_packet) - sizeof(eth_header), swap16(12345), swap16(dest_port), 0, 0, TCP_SYN, 520, tcp_options, option_len);
+
+    // Pseudo-header for checksum calculation
+    char pseudo_header[12];
+    create_pseudo_header(pseudo_header, src_ip, dst_ip, sizeof(tcp_packet) + option_len - sizeof(ipv4_packet));
+
+    // Calculate checksum
+    tx_tcp->checksum = checksum(pseudo_header, sizeof(pseudo_header)) + checksum((u8*)tx_tcp + sizeof(ipv4_packet), sizeof(tcp_packet) + option_len - sizeof(ipv4_packet));
+
+    // Send SYN packet
+    net_send(tosend, sizeof(tcp_packet) + option_len);
+    b_output("SYN packet sent.\n", (unsigned long)strlen("SYN packet sent.\n"));
+}
 
 int main(){
-    b_output("\nminIP Client2.0\n",(unsigned long)strlen("\nminIP Client2.0\n"));
+    b_output("\nminIP Client2.0\n", (unsigned long)strlen("\nminIP Client2.0\n"));  
     net_init();
+
     u16 dest_port = 8129;
-    u8 server_ip[4] ={10,13,100,131};
+    u8 server_ip[4] = {10, 13, 100, 131};
+    u8 broadcast_mac[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+    
+    // Send initial ARP request
+    send_arp_request(server_ip, broadcast_mac, src_MAC, src_IP, tosend);
+    b_output("ARP Request Sent. Waiting for Reply\n", (unsigned long)strlen("ARP Request Sent. Waiting for Reply\n"));
 
-    //ARP Packet
-    arp_packet* tx_arp = (arp_packet*)tosend;
-	// Ethernet
-	memcpy(tx_arp->ethernet.dest_mac, (u8[]){0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}, 6);
-	memcpy(tx_arp->ethernet.src_mac, src_MAC, 6);
-	tx_arp->ethernet.type = swap16(ETHERTYPE_ARP);
-	// ARP
-	tx_arp->hardware_type = swap16(1); // Ethernet
-	tx_arp->protocol = swap16(ETHERTYPE_IPv4);
-	tx_arp->hardware_size = 6;
-	tx_arp->protocol_size = 4;
-	tx_arp->opcode = swap16(ARP_REQUEST);
-	memcpy(tx_arp->sender_mac, src_MAC, 6);
-	memcpy(tx_arp->sender_ip, src_IP, 4);
-	// memcpy(tx_arp->target_mac, rx_arp->sender_mac, 6);
-	memcpy(tx_arp->target_ip, server_ip, 4);
-	// Send the reply
-	net_send(tosend, 42);
-    b_output("ARP Request Sent. Waiting for Reply\n",(unsigned long)strlen("ARP Request Sent. Waiting for Reply\n"));
-
-    //Recieve ARP Reply
+    // Receive ARP reply
     while (1) {
         recv_packet_len = net_recv(buffer);
         eth_header* rx_eth = (eth_header*)buffer;
@@ -130,109 +223,22 @@ int main(){
         if (recv_packet_len > 0 && swap16(rx_eth->type) == ETHERTYPE_ARP) {
             arp_packet* rx_arp = (arp_packet*)buffer;
             if (swap16(rx_arp->opcode) == ARP_REPLY) {
-                if (memcmp(server_ip, rx_arp->sender_ip, 4) == 0) {    
-                    b_output("ARP Packet Received\n",(unsigned long)strlen("ARP Packet Received\n"));
+                if (memcmp(server_ip, rx_arp->sender_ip, 4) == 0) {
+                    b_output("ARP Packet Received\n", (unsigned long)strlen("ARP Packet Received\n"));
                     memcpy(dst_MAC, rx_arp->sender_mac, 6);
                     b_output("Server MAC Address obtained.\n", (unsigned long)strlen("Server MAC Address obtained.\n"));
                     break;
-                }else{
-                    //ARP Packet
-                    arp_packet* tx_arp = (arp_packet*)tosend;
-                    // Ethernet
-                    memcpy(tx_arp->ethernet.dest_mac, (u8[]){0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}, 6);
-                    memcpy(tx_arp->ethernet.src_mac, src_MAC, 6);
-                    tx_arp->ethernet.type = swap16(ETHERTYPE_ARP);
-                    // ARP
-                    tx_arp->hardware_type = swap16(1); // Ethernet
-                    tx_arp->protocol = swap16(ETHERTYPE_IPv4);
-                    tx_arp->hardware_size = 6;
-                    tx_arp->protocol_size = 4;
-                    tx_arp->opcode = swap16(ARP_REQUEST);
-                    memcpy(tx_arp->sender_mac, src_MAC, 6);
-                    memcpy(tx_arp->sender_ip, src_IP, 4);
-                    // memcpy(tx_arp->target_mac, rx_arp->sender_mac, 6);
-                    memcpy(tx_arp->target_ip, server_ip, 4);
-                    // Send the reply
-                    net_send(tosend, 42);
+                } else {
+                    // Send ARP request again if the response is not from the correct server
+                    send_arp_request(server_ip, broadcast_mac, src_MAC, src_IP, tosend);
                 }
             }
         }
     }
 
-    // TCP Option - Maximum segment size: 1460 bytes
-    u8 mss_option[] = {0x02, 0x04, 0x05, 0xb4};  // Kind: MSS(2), Length: 4, MSS Value: 1460
-
-    // TCP Option - SACK permitted
-    u8 sack_permitted[] = {0x04, 0x02};  // Kind: SACK Permitted(4), Length: 2
-    
-    // TCP Option - Timestamps: TSval 2291102, TSecr 0
-    u8 timestamp_option[] = {0x08, 0x0A, 0x22, 0x45, 0x0E, 0x56, 0x00, 0x00, 0x00, 0x00};  // TSval: 2291102, TSecr: 0
-
-    // TCP Option - No-Operation (NOP)
-    u8 nop_option[] = {0x01};  // Kind: No-Operation (NOP)
-
-    // TCP Option - Window scale: 7 (multiply by 128)
-    u8 window_scale_option[] = {0x03, 0x03, 0x07};  // Kind: Window Scale(3), Length: 3, Shift count: 7
-
-    // Combine the options into a single array
-    u8 tcp_options[20];
-    memcpy(tcp_options, mss_option, sizeof(mss_option));
-    memcpy(tcp_options + sizeof(mss_option), sack_permitted, sizeof(sack_permitted));
-    memcpy(tcp_options + sizeof(mss_option) + sizeof(sack_permitted), timestamp_option, sizeof(timestamp_option));
-    memcpy(tcp_options + sizeof(mss_option) + sizeof(sack_permitted) + sizeof(timestamp_option), nop_option, sizeof(nop_option));
-    memcpy(tcp_options + sizeof(mss_option) + sizeof(sack_permitted) + sizeof(timestamp_option) + sizeof(nop_option), window_scale_option, sizeof(window_scale_option));
-
-    tcp_packet* tx_tcp = (tcp_packet*)tosend;
-    memset(tx_tcp, 0, sizeof(tcp_packet));
-
-    // Ethernet header 
-    memcpy(tx_tcp->ipv4.ethernet.dest_mac, dst_MAC, 6);
-    memcpy(tx_tcp->ipv4.ethernet.src_mac, src_MAC, 6);
-    tx_tcp->ipv4.ethernet.type = swap16(ETHERTYPE_IPv4);
-
-    // IPv4 header
-    tx_tcp->ipv4.version = 4 << 4 | 5;
-    tx_tcp->ipv4.dsf = 0; 
-    tx_tcp->ipv4.ttl = 64;
-    tx_tcp->ipv4.id = swap16(54321);
-    tx_tcp->ipv4.protocol = PROTOCOL_IP_TCP;
-    memcpy(tx_tcp->ipv4.src_ip, src_IP, 4);
-    memcpy(tx_tcp->ipv4.dest_ip, dst_IP, 4);
-
-    tx_tcp->ipv4.flags = swap16(0x4000); 
-    tx_tcp->ipv4.total_length = swap16(20 + 20 + 20);
-    tx_tcp->ipv4.checksum = 0;
-    tx_tcp->ipv4.checksum = checksum((u8*)&tx_tcp->ipv4 + sizeof(eth_header), sizeof(ipv4_packet) - sizeof(eth_header));
-
-    // TCP header
-    tx_tcp->src_port = swap16(12345);
-    tx_tcp->dest_port = swap16(dest_port);
-    tx_tcp->seqnum = swap32(0);
-    tx_tcp->acknum = 0;
-    tx_tcp->data_offset = 10 << 4;  
-    tx_tcp->flags = TCP_SYN;
-    tx_tcp->window = swap16(520);
-    tx_tcp->checksum = 0;
-    tx_tcp->urg_pointer = 0;
-
-    memcpy((u8*)tx_tcp + sizeof(tcp_packet), tcp_options, sizeof(tcp_options));
-
-    char pseudo_header[12];
-
-    // Set the source and destination IP addresses in the pseudo-header
-    memcpy(pseudo_header, src_IP, 4);        // Source IP (4 bytes)
-    memcpy(pseudo_header + 4, dst_IP, 4);    // Destination IP (4 bytes)
-    pseudo_header[8] = 0;                    // Zero byte
-    pseudo_header[9] = PROTOCOL_IP_TCP;      // Protocol (TCP)
-    pseudo_header[10] = (u8)((sizeof(tcp_packet) + sizeof(tcp_options) - sizeof(ipv4_packet)) >> 8);  // TCP Length (high byte)
-    pseudo_header[11] = (u8)((sizeof(tcp_packet) + sizeof(tcp_options) - sizeof(ipv4_packet)) & 0xFF); // TCP Length (low byte)
-
-    tx_tcp->checksum = checksum(pseudo_header, sizeof(pseudo_header)) + checksum((u8*)tx_tcp + sizeof(ipv4_packet), sizeof(tcp_packet) + sizeof(tcp_options) - sizeof(ipv4_packet));
-
-    // Send the SYN packet
-    net_send(tosend, sizeof(tcp_packet) + sizeof(tcp_options)); 
-    b_output("SYN packet sent.\n", (unsigned long)strlen("SYN packet sent.\n"));
-
+    // Sending SYN Packet
+    send_syn_packet(tosend,src_IP,dst_IP,dest_port);
+   
     while (running)
     {
         recv_packet_len = net_recv(buffer);
@@ -244,218 +250,70 @@ int main(){
                 if(rx_ipv4->protocol == PROTOCOL_IP_TCP){
                     tcp_packet* rx_tcp = (tcp_packet*)buffer;
                     if(((rx_tcp->flags == TCP_ACK) && (rx_tcp->seqnum == swap32(1))) || ((rx_tcp->flags & (TCP_SYN | TCP_ACK)) == (TCP_SYN | TCP_ACK))){
-                        tcp_packet* tx_ack = (tcp_packet*)tosend;
-                        memset(tx_ack, 0 ,sizeof(tcp_packet));
-                        // Ethernet
-                        memcpy(tx_ack->ipv4.ethernet.dest_mac, rx_tcp->ipv4.ethernet.src_mac, 6);
-                        memcpy(tx_ack->ipv4.ethernet.src_mac, rx_tcp->ipv4.ethernet.dest_mac, 6);
-                        tx_ack->ipv4.ethernet.type = swap16(ETHERTYPE_IPv4);
-                        // IPv4
-                        tx_ack->ipv4.version = rx_tcp->ipv4.version;
-                        tx_ack->ipv4.ttl = rx_tcp->ipv4.ttl;
-                        tx_ack->ipv4.protocol = PROTOCOL_IP_TCP;
-                        memcpy(tx_ack->ipv4.src_ip, rx_tcp->ipv4.dest_ip, 4);
-                        memcpy(tx_ack->ipv4.dest_ip, rx_tcp->ipv4.src_ip, 4);
-                        tx_ack->ipv4.total_length = swap16(20+20);
-                        tx_ack->ipv4.checksum = checksum((u8*)&tx_tcp->ipv4 + sizeof(eth_header), sizeof(ipv4_packet) - sizeof(eth_header));
-                        // TCP
-                        tx_ack->src_port = rx_tcp->dest_port;
-                        tx_ack->dest_port = rx_tcp->src_port;
-                        tx_ack->seqnum = swap32(swap32(rx_tcp->acknum));
-                        tx_ack->acknum = swap32(swap32(rx_tcp->seqnum) + 1);
-                        tx_ack->data_offset = 5<<4;
-                        tx_ack->flags = TCP_ACK;
-                        tx_ack->window = swap16(5840);
-                        tx_ack->checksum = 0;
-                        tx_ack->urg_pointer = 0;
-                        
+                        tcp_packet* tx_ack = (tcp_packet*)tosend;     
+                        // Building TCP Header for SYN-ACK 
+                        build_tcp_header(tx_ack, rx_tcp->ipv4.dest_ip, rx_tcp->ipv4.src_ip, sizeof(tcp_packet) - sizeof(eth_header), rx_tcp->dest_port, rx_tcp->src_port,
+                                     swap32(rx_tcp->acknum), swap32(rx_tcp->seqnum), TCP_ACK, 512, 0, 0);
                         char pseudo_header[12];
-                        // Set the source and destination IP addresses in the pseudo-header
-                        memcpy(pseudo_header, rx_tcp->ipv4.dest_ip, 4);        // Source IP (4 bytes)
-                        memcpy(pseudo_header + 4, rx_tcp->ipv4.src_ip, 4);    // Destination IP (4 bytes)
-                        pseudo_header[8] = 0;                    // Zero byte
-                        pseudo_header[9] = PROTOCOL_IP_TCP;      // Protocol (TCP)
-                        pseudo_header[10] = (u8)((sizeof(tcp_packet) - sizeof(ipv4_packet)) >> 8);  // TCP Length (high byte)
-                        pseudo_header[11] = (u8)((sizeof(tcp_packet) - sizeof(ipv4_packet)) & 0xFF); // TCP Length (low byte)
-
-                        tx_tcp->checksum = checksum(pseudo_header, sizeof(pseudo_header)) + checksum((u8*)tx_tcp + sizeof(ipv4_packet), sizeof(tcp_packet) - sizeof(ipv4_packet));
-                        
-                        //Send ACK packer
+                        create_pseudo_header(pseudo_header, rx_tcp->ipv4.dest_ip, rx_tcp->ipv4.src_ip, sizeof(tcp_packet)-sizeof(ipv4_packet));
+                        tx_ack->checksum = checksum(pseudo_header, sizeof(pseudo_header)) + 
+                                        checksum((u8*)tx_ack + sizeof(ipv4_packet), sizeof(tcp_packet) - sizeof(ipv4_packet));
+                        //Send ACK packet
                         net_send(tosend, sizeof(tcp_packet));
                         b_output("Connection Established\n", (unsigned long)strlen("Connection Established\n"));
-
+                        
+                        //Building the Message Packet and Sending to server
                         char* input = "Hello from the client";
-                        tcp_packet* tx_psh = (tcp_packet*)tosend;
-                        memset(tx_psh, 0, sizeof(tcp_packet));
-
-                        // Ethernet
-                        memcpy(tx_psh->ipv4.ethernet.dest_mac, rx_tcp->ipv4.ethernet.src_mac, 6);
-                        memcpy(tx_psh->ipv4.ethernet.src_mac, rx_tcp->ipv4.ethernet.dest_mac, 6);
-                        tx_psh->ipv4.ethernet.type = swap16(ETHERTYPE_IPv4);
-                        // IPv4
-                        tx_ack->ipv4.version = rx_tcp->ipv4.version;
-                        tx_tcp->ipv4.dsf = rx_tcp->ipv4.dsf; 
-                        tx_ack->ipv4.ttl = rx_tcp->ipv4.ttl;
-                        tx_psh->ipv4.protocol = PROTOCOL_IP_TCP;
-                        memcpy(tx_psh->ipv4.src_ip, rx_tcp->ipv4.dest_ip, 4);
-                        memcpy(tx_psh->ipv4.dest_ip, rx_tcp->ipv4.src_ip, 4);
                         int payload_len = strlen(input);
-                        tx_psh->ipv4.total_length = swap16(20 + 20 + payload_len); 
-                        tx_psh->ipv4.checksum = 0;
-                        tx_psh->ipv4.checksum = checksum((u8*)&tx_tcp->ipv4 + sizeof(eth_header), sizeof(ipv4_packet) - sizeof(eth_header));
-                        // TCP
-                        tx_psh->src_port = rx_tcp->dest_port;
-                        tx_psh->dest_port = rx_tcp->src_port;
-                        tx_psh->seqnum = swap32(swap32(rx_tcp->acknum));
-                        tx_psh->acknum = swap32(swap32(rx_tcp->seqnum) + 1);
-                        tx_psh->data_offset = 5 << 4;  // 4-byte aligned
-
-                        tx_psh->flags = TCP_PSH | TCP_ACK;
-                        tx_psh->window = swap16(512);
-                        tx_psh->checksum = 0; 
-                        tx_psh->urg_pointer = 0;
-
-                        // Pseudo-header for checksum calculation
+                        tcp_packet* tx_psh = (tcp_packet*)tosend;
+                        build_tcp_header(tx_psh, rx_tcp->ipv4.dest_ip, rx_tcp->ipv4.src_ip, sizeof(tcp_packet) - sizeof(eth_header) + payload_len,
+                                     rx_tcp->dest_port, rx_tcp->src_port, swap32(rx_tcp->acknum), swap32(rx_tcp->seqnum), TCP_PSH | TCP_ACK, 512, 0, 0);
                         char pseudo[12];
-                        memcpy(pseudo, tx_psh->ipv4.src_ip, 4);     // Source IP
-                        memcpy(pseudo + 4, tx_psh->ipv4.dest_ip, 4); // Destination IP
-                        pseudo[8] = 0;                               // Reserved
-                        pseudo[9] = PROTOCOL_IP_TCP;                 // Protocol
-                        pseudo[10] = (u8)((sizeof(tcp_packet) - sizeof(ipv4_packet) + payload_len) >> 8);  // Updated TCP Length (high byte)
-                        pseudo[11] = (u8)((sizeof(tcp_packet) - sizeof(ipv4_packet) + payload_len) & 0xFF);  // Updated TCP Length (low byte)
-
-                        // Calculate TCP checksum
+                        create_pseudo_header(pseudo, rx_tcp->ipv4.dest_ip, rx_tcp->ipv4.src_ip, sizeof(tcp_packet) - sizeof(ipv4_packet) + payload_len);
                         tx_psh->checksum = checksum(pseudo, sizeof(pseudo)) +
                                         checksum((u8*)tx_psh + sizeof(ipv4_packet), sizeof(tcp_packet) - sizeof(ipv4_packet) + payload_len);
-
-                        // Copy the payload after the TCP header
-                        memcpy((u8*)tx_psh + sizeof(tcp_packet), input, payload_len);  // Adjusted offset for options
-
+                        memcpy((u8*)tx_psh + sizeof(tcp_packet), input, payload_len);
                         // Send the packet
-                        net_send(tosend, sizeof(tcp_packet) + payload_len);  // Include size of options
+                        net_send(tosend, sizeof(tcp_packet) + payload_len);
                         b_output("Message Sent\n", (unsigned long)strlen("Message Sent\n"));
                     }else if((rx_tcp->flags & (TCP_PSH | TCP_ACK)) == (TCP_PSH | TCP_ACK)){
+                        //Building ACK Packet for Message Packet for Server
                         tcp_packet* tx_ack = (tcp_packet*)tosend;
-                        memset(tx_ack, 0 ,sizeof(tcp_packet));
-                        // Ethernet
-                        memcpy(tx_ack->ipv4.ethernet.dest_mac, rx_tcp->ipv4.ethernet.src_mac, 6);
-                        memcpy(tx_ack->ipv4.ethernet.src_mac, rx_tcp->ipv4.ethernet.dest_mac, 6);
-                        tx_ack->ipv4.ethernet.type = swap16(ETHERTYPE_IPv4);
-                        // IPv4
-                        tx_ack->ipv4.version = rx_tcp->ipv4.version;
-                        tx_ack->ipv4.ttl = rx_tcp->ipv4.ttl;
-                        tx_ack->ipv4.protocol = PROTOCOL_IP_TCP;
-                        memcpy(tx_ack->ipv4.src_ip, rx_tcp->ipv4.dest_ip, 4);
-                        memcpy(tx_ack->ipv4.dest_ip, rx_tcp->ipv4.src_ip, 4);
-                        tx_ack->ipv4.total_length = swap16(20+20);
-                        tx_ack->ipv4.checksum = checksum((u8*)&tx_tcp->ipv4 + sizeof(eth_header), sizeof(ipv4_packet) - sizeof(eth_header));
-                        // TCP
-                        tx_ack->src_port = rx_tcp->dest_port;
-                        tx_ack->dest_port = rx_tcp->src_port;
-                        tx_ack->seqnum = swap32(swap32(rx_tcp->acknum));
-                        tx_ack->acknum = swap32(swap32(rx_tcp->seqnum) + (swap16(rx_tcp->ipv4.total_length) - 52));
-                        tx_ack->data_offset = 5<<4;
-                        tx_ack->flags = TCP_ACK;
-                        tx_ack->window = swap16(5840);
-                        tx_ack->checksum = 0;
-                        tx_ack->urg_pointer = 0;
-                        
+                        build_tcp_header(tx_ack, rx_tcp->ipv4.dest_ip, rx_tcp->ipv4.src_ip, sizeof(tcp_packet) - sizeof(eth_header), rx_tcp->dest_port, rx_tcp->src_port,
+                                     swap32(rx_tcp->acknum), swap32(rx_tcp->seqnum) + (swap16(rx_tcp->ipv4.total_length) - 52) - 1, TCP_ACK, 512, 0, 0);    
                         char pseudo_header[12];
-                        // Set the source and destination IP addresses in the pseudo-header
-                        memcpy(pseudo_header, rx_tcp->ipv4.dest_ip, 4);        // Source IP (4 bytes)
-                        memcpy(pseudo_header + 4, rx_tcp->ipv4.src_ip, 4);    // Destination IP (4 bytes)
-                        pseudo_header[8] = 0;                    // Zero byte
-                        pseudo_header[9] = PROTOCOL_IP_TCP;      // Protocol (TCP)
-                        pseudo_header[10] = (u8)((sizeof(tcp_packet) - sizeof(ipv4_packet)) >> 8);  // TCP Length (high byte)
-                        pseudo_header[11] = (u8)((sizeof(tcp_packet) - sizeof(ipv4_packet)) & 0xFF); // TCP Length (low byte)
-
-                        tx_tcp->checksum = checksum(pseudo_header, sizeof(pseudo_header)) + checksum((u8*)tx_tcp + sizeof(ipv4_packet), sizeof(tcp_packet) - sizeof(ipv4_packet));
-                        
-                        //Send ACK packer
+                        create_pseudo_header(pseudo_header, rx_tcp->ipv4.dest_ip, rx_tcp->ipv4.src_ip, sizeof(tcp_packet) - sizeof(ipv4_packet));
+                        tx_ack->checksum = checksum(pseudo_header, sizeof(pseudo_header)) + 
+                                        checksum((u8*)tx_ack + sizeof(ipv4_packet), sizeof(tcp_packet) - sizeof(ipv4_packet));
+                        //Send the Packet
                         net_send(tosend, sizeof(tcp_packet));
                         b_output("Ack Sent\n", (unsigned long)strlen("Ack Sent\n"));
 
+                        //Printing Message from Server
                         char* message = (char*)rx_tcp + sizeof(tcp_packet) + 12;
 						b_output(message,(unsigned long)strlen(message));
+
+                        //Building FIN packet for terminating Connection with Server
                         tcp_packet* tx_fin = (tcp_packet*)tosend;
-                        memset(tx_fin, 0 ,sizeof(tcp_packet));
-                        // Ethernet
-                        memcpy(tx_fin->ipv4.ethernet.dest_mac, rx_tcp->ipv4.ethernet.src_mac, 6);
-                        memcpy(tx_fin->ipv4.ethernet.src_mac, rx_tcp->ipv4.ethernet.dest_mac, 6);
-                        tx_fin->ipv4.ethernet.type = swap16(ETHERTYPE_IPv4);
-                        // IPv4
-                        tx_fin->ipv4.version = rx_tcp->ipv4.version;
-                        tx_fin->ipv4.ttl = rx_tcp->ipv4.ttl;
-                        tx_fin->ipv4.protocol = PROTOCOL_IP_TCP;
-                        memcpy(tx_fin->ipv4.src_ip, rx_tcp->ipv4.dest_ip, 4);
-                        memcpy(tx_fin->ipv4.dest_ip, rx_tcp->ipv4.src_ip, 4);
-                        tx_fin->ipv4.total_length = swap16(20 + 20);
-                        tx_fin->ipv4.checksum = checksum((u8*)&tx_tcp->ipv4 + sizeof(eth_header), sizeof(ipv4_packet) - sizeof(eth_header));
-                        // TCP
-                        tx_fin->src_port = rx_tcp->dest_port;
-                        tx_fin->dest_port = rx_tcp->src_port;
-                        tx_fin->seqnum = swap32(swap32(rx_tcp->acknum));
-                        tx_fin->acknum = swap32(swap32(rx_tcp->seqnum) + 1);
-                        tx_fin->data_offset = 5 << 4;
-                        tx_fin->flags = TCP_FIN | TCP_ACK;  // Set FIN and ACK flags
-                        tx_fin->window = swap16(5840);
-                        tx_fin->checksum = 0;
-                        tx_fin->urg_pointer = 0;
-
+                        build_tcp_header(tx_ack, rx_tcp->ipv4.dest_ip, rx_tcp->ipv4.src_ip, sizeof(tcp_packet) - sizeof(eth_header), rx_tcp->dest_port, rx_tcp->src_port,
+                                     swap32(rx_tcp->acknum), swap32(rx_tcp->seqnum) + (swap16(rx_tcp->ipv4.total_length) - 52), TCP_FIN, 512, 0, 0);
                         char pseudo[12];
-                        memcpy(pseudo, tx_fin->ipv4.src_ip, 4);     // Source IP
-                        memcpy(pseudo + 4, tx_fin->ipv4.dest_ip, 4); // Destination IP
-                        pseudo[8] = 0;                               // Reserved
-                        pseudo[9] = PROTOCOL_IP_TCP;                 // Protocol
-                        pseudo[10] = (u8)((sizeof(tcp_packet) - sizeof(ipv4_packet)) >> 8);  // Updated TCP Length (high byte)
-                        pseudo[11] = (u8)((sizeof(tcp_packet) - sizeof(ipv4_packet)) & 0xFF);  // Updated TCP Length (low byte)
-
-                        // Calculate TCP checksum
+                        create_pseudo_header(pseudo_header, rx_tcp->ipv4.dest_ip, rx_tcp->ipv4.src_ip, sizeof(tcp_packet) - sizeof(ipv4_packet));
                         tx_fin->checksum = checksum(pseudo, sizeof(pseudo)) +
                                         checksum((u8*)tx_fin + sizeof(ipv4_packet), sizeof(tcp_packet) - sizeof(ipv4_packet));
-
                         // Send the ACK packet
                         net_send(tosend, sizeof(tcp_packet));
                         b_output("Connection Break Request.\n", (unsigned long)strlen("Connection Break Request.\n"));
-                        break;
                     }else if((rx_tcp->flags & (TCP_FIN | TCP_ACK)) == (TCP_FIN | TCP_ACK)){
+                        //Building ACK packet for FIN-ACK by Server
                         tcp_packet* tx_fin = (tcp_packet*)tosend;
-                        memset(tx_fin, 0 ,sizeof(tcp_packet));
-                        // Ethernet
-                        memcpy(tx_fin->ipv4.ethernet.dest_mac, rx_tcp->ipv4.ethernet.src_mac, 6);
-                        memcpy(tx_fin->ipv4.ethernet.src_mac, rx_tcp->ipv4.ethernet.dest_mac, 6);
-                        tx_fin->ipv4.ethernet.type = swap16(ETHERTYPE_IPv4);
-                        // IPv4
-                        tx_fin->ipv4.version = rx_tcp->ipv4.version;
-                        tx_fin->ipv4.ttl = rx_tcp->ipv4.ttl;
-                        tx_fin->ipv4.protocol = PROTOCOL_IP_TCP;
-                        memcpy(tx_fin->ipv4.src_ip, rx_tcp->ipv4.dest_ip, 4);
-                        memcpy(tx_fin->ipv4.dest_ip, rx_tcp->ipv4.src_ip, 4);
-                        tx_fin->ipv4.total_length = swap16(20+20);
-                        tx_fin->ipv4.checksum = checksum((u8*)&tx_tcp->ipv4 + sizeof(eth_header), sizeof(ipv4_packet) - sizeof(eth_header));
-                        // TCP
-                        tx_fin->src_port = rx_tcp->dest_port;
-                        tx_fin->dest_port = rx_tcp->src_port;
-                        tx_fin->seqnum = swap32(swap32(rx_tcp->acknum));
-                        tx_fin->acknum = swap32(swap32(rx_tcp->seqnum) + 1);
-                        tx_fin->data_offset = 5<<4;
-                        tx_fin->flags = TCP_ACK;
-                        tx_fin->window = swap16(5840);
-                        tx_fin->checksum = 0;
-                        tx_fin->urg_pointer = 0;
-                        
+                        build_tcp_header(tx_fin, rx_tcp->ipv4.dest_ip, rx_tcp->ipv4.src_ip, sizeof(tcp_packet) - sizeof(eth_header), rx_tcp->dest_port, rx_tcp->src_port,
+                                     swap32(rx_tcp->acknum), swap32(rx_tcp->seqnum) + (swap16(rx_tcp->ipv4.total_length) - 52), TCP_ACK, 512, 0, 0);
                         char pseudo_header[12];
-                        // Set the source and destination IP addresses in the pseudo-header
-                        memcpy(pseudo_header, rx_tcp->ipv4.dest_ip, 4);        // Source IP (4 bytes)
-                        memcpy(pseudo_header + 4, rx_tcp->ipv4.src_ip, 4);    // Destination IP (4 bytes)
-                        pseudo_header[8] = 0;                    // Zero byte
-                        pseudo_header[9] = PROTOCOL_IP_TCP;      // Protocol (TCP)
-                        pseudo_header[10] = (u8)((sizeof(tcp_packet) - sizeof(ipv4_packet)) >> 8);  // TCP Length (high byte)
-                        pseudo_header[11] = (u8)((sizeof(tcp_packet) - sizeof(ipv4_packet)) & 0xFF); // TCP Length (low byte)
-
-                        tx_tcp->checksum = checksum(pseudo_header, sizeof(pseudo_header)) + checksum((u8*)tx_tcp + sizeof(ipv4_packet), sizeof(tcp_packet) - sizeof(ipv4_packet));
-                        
-                        //Send ACK packer
+                        create_pseudo_header(pseudo_header, rx_tcp->ipv4.dest_ip, rx_tcp->ipv4.src_ip, sizeof(tcp_packet) - sizeof(ipv4_packet));
+                        tx_fin->checksum = checksum(pseudo_header, sizeof(pseudo_header)) +
+                                        checksum((u8*)tx_fin + sizeof(ipv4_packet), sizeof(tcp_packet) - sizeof(ipv4_packet));
+                        //Send ACK packet
                         net_send(tosend, sizeof(tcp_packet));
                         b_output("Connection Terminated\n", (unsigned long)strlen("Connection terminated\n"));
                         break;
