@@ -203,8 +203,36 @@ void send_syn_packet(u8 *tosend, u8 *src_ip, u8 *dst_ip, u16 dest_port) {
     b_output("SYN packet sent.\n", (unsigned long)strlen("SYN packet sent.\n"));
 }
 
+// Function to convert u64 to a string (manual integer to string conversion)
+void u64_to_str(u64 value, char* str) {
+    int i = 0;
+    if (value == 0) {
+        str[i++] = '0';
+    } else {
+        while (value > 0) {
+            str[i++] = '0' + (value % 10);
+            value /= 10;
+        }
+        for (int j = 0; j < i / 2; j++) {
+            char temp = str[j];
+            str[j] = str[i - j - 1];
+            str[i - j - 1] = temp;
+        }
+    }
+    str[i] = '\0';
+}
+
 int main(){
-    b_output("\nminIP Client2.0\n", (unsigned long)strlen("\nminIP Client2.0\n"));  
+    b_output("\nminIP Client2.0\n", (unsigned long)strlen("\nminIP Client2.0\n"));
+
+    u64 time = b_system(TIMECOUNTER, 0, 0);
+
+    char timeStr[32]; 
+    u64_to_str(time, timeStr); 
+
+    b_output(timeStr, (unsigned long)strlen(timeStr)); 
+    b_output("Desired Time\n", (unsigned long)strlen("Desired Time\n")); 
+
     net_init();
 
     u16 dest_port = 8129;
@@ -261,7 +289,9 @@ int main(){
                         //Send ACK packet
                         net_send(tosend, sizeof(tcp_packet));
                         b_output("Connection Established\n", (unsigned long)strlen("Connection Established\n"));
-                        
+
+                        // b_system(DELAY, 10000000, 0);
+
                         //Building the Message Packet and Sending to server
                         char* input = "Hello from the client";
                         int payload_len = strlen(input);
@@ -276,6 +306,23 @@ int main(){
                         // Send the packet
                         net_send(tosend, sizeof(tcp_packet) + payload_len);
                         b_output("Message Sent\n", (unsigned long)strlen("Message Sent\n"));
+
+                        // b_system(DELAY, 10000000, 0);
+
+                        //Building the Message Packet and Sending to server
+                        // char* input1 = "Hello from the client";
+                        // int payload_len1 = strlen(input1);
+                        // tcp_packet* tx_psh1 = (tcp_packet*)tosend;
+                        // build_tcp_header(tx_psh1, rx_tcp->ipv4.dest_ip, rx_tcp->ipv4.src_ip, sizeof(tcp_packet) - sizeof(eth_header) + payload_len1,
+                        //              rx_tcp->dest_port, rx_tcp->src_port, swap32(rx_tcp->acknum), swap32(rx_tcp->seqnum), TCP_PSH | TCP_ACK, 512, 0, 0);
+                        // char pseudo1[12];
+                        // create_pseudo_header(pseudo1, rx_tcp->ipv4.dest_ip, rx_tcp->ipv4.src_ip, sizeof(tcp_packet) - sizeof(ipv4_packet) + payload_len1);
+                        // tx_psh1->checksum = checksum(pseudo1, sizeof(pseudo1)) +
+                        //                 checksum((u8*)tx_psh1 + sizeof(ipv4_packet), sizeof(tcp_packet) - sizeof(ipv4_packet) + payload_len1);
+                        // memcpy((u8*)tx_psh1 + sizeof(tcp_packet), input1, payload_len1);
+                        // // Send the packet
+                        // net_send(tosend, sizeof(tcp_packet) + payload_len1);
+                        // b_output("Second Message Sent\n", (unsigned long)strlen("Second Message Sent\n"));
                     }else if((rx_tcp->flags & (TCP_PSH | TCP_ACK)) == (TCP_PSH | TCP_ACK)){
                         //Building ACK Packet for Message Packet for Server
                         tcp_packet* tx_ack = (tcp_packet*)tosend;
@@ -293,22 +340,37 @@ int main(){
                         char* message = (char*)rx_tcp + sizeof(tcp_packet) + 12;
 						b_output(message,(unsigned long)strlen(message));
 
+                        //Building the Message Packet and Sending to server
+                        char* input1 = "Hello from the client";
+                        int payload_len1 = strlen(input1);
+                        tcp_packet* tx_psh1 = (tcp_packet*)tosend;
+                        build_tcp_header(tx_psh1, rx_tcp->ipv4.dest_ip, rx_tcp->ipv4.src_ip, sizeof(tcp_packet) - sizeof(eth_header) + payload_len1,
+                                     rx_tcp->dest_port, rx_tcp->src_port, swap32(rx_tcp->acknum), swap32(rx_tcp->seqnum) + (swap16(rx_tcp->ipv4.total_length) - 52) - 1, TCP_PSH | TCP_ACK, 512, 0, 0);
+                        char pseudo1[12];
+                        create_pseudo_header(pseudo1, rx_tcp->ipv4.dest_ip, rx_tcp->ipv4.src_ip, sizeof(tcp_packet) - sizeof(ipv4_packet) + payload_len1);
+                        tx_psh1->checksum = checksum(pseudo1, sizeof(pseudo1)) +
+                                        checksum((u8*)tx_psh1 + sizeof(ipv4_packet), sizeof(tcp_packet) - sizeof(ipv4_packet) + payload_len1);
+                        memcpy((u8*)tx_psh1 + sizeof(tcp_packet), input1, payload_len1);
+                        // Send the packet
+                        net_send(tosend, sizeof(tcp_packet) + payload_len1);
+                        b_output("Message Sent\n", (unsigned long)strlen("Message Sent\n"));
+
                         //Building FIN packet for terminating Connection with Server
-                        tcp_packet* tx_fin = (tcp_packet*)tosend;
-                        build_tcp_header(tx_ack, rx_tcp->ipv4.dest_ip, rx_tcp->ipv4.src_ip, sizeof(tcp_packet) - sizeof(eth_header), rx_tcp->dest_port, rx_tcp->src_port,
-                                     swap32(rx_tcp->acknum), swap32(rx_tcp->seqnum) + (swap16(rx_tcp->ipv4.total_length) - 52), TCP_FIN, 512, 0, 0);
-                        char pseudo[12];
-                        create_pseudo_header(pseudo_header, rx_tcp->ipv4.dest_ip, rx_tcp->ipv4.src_ip, sizeof(tcp_packet) - sizeof(ipv4_packet));
-                        tx_fin->checksum = checksum(pseudo, sizeof(pseudo)) +
-                                        checksum((u8*)tx_fin + sizeof(ipv4_packet), sizeof(tcp_packet) - sizeof(ipv4_packet));
-                        // Send the ACK packet
-                        net_send(tosend, sizeof(tcp_packet));
-                        b_output("Connection Break Request.\n", (unsigned long)strlen("Connection Break Request.\n"));
+                        // tcp_packet* tx_fin = (tcp_packet*)tosend;
+                        // build_tcp_header(tx_ack, rx_tcp->ipv4.dest_ip, rx_tcp->ipv4.src_ip, sizeof(tcp_packet) - sizeof(eth_header), rx_tcp->dest_port, rx_tcp->src_port,
+                        //              swap32(rx_tcp->acknum), swap32(rx_tcp->seqnum) + (swap16(rx_tcp->ipv4.total_length) - 52) - 1, TCP_FIN, 512, 0, 0);
+                        // char pseudo[12];
+                        // create_pseudo_header(pseudo_header, rx_tcp->ipv4.dest_ip, rx_tcp->ipv4.src_ip, sizeof(tcp_packet) - sizeof(ipv4_packet));
+                        // tx_fin->checksum = checksum(pseudo, sizeof(pseudo)) +
+                        //                 checksum((u8*)tx_fin + sizeof(ipv4_packet), sizeof(tcp_packet) - sizeof(ipv4_packet));
+                        // // Send the ACK packet
+                        // net_send(tosend, sizeof(tcp_packet));
+                        // b_output("Connection Break Request.\n", (unsigned long)strlen("Connection Break Request.\n"));
                     }else if((rx_tcp->flags & (TCP_FIN | TCP_ACK)) == (TCP_FIN | TCP_ACK)){
                         //Building ACK packet for FIN-ACK by Server
                         tcp_packet* tx_fin = (tcp_packet*)tosend;
                         build_tcp_header(tx_fin, rx_tcp->ipv4.dest_ip, rx_tcp->ipv4.src_ip, sizeof(tcp_packet) - sizeof(eth_header), rx_tcp->dest_port, rx_tcp->src_port,
-                                     swap32(rx_tcp->acknum), swap32(rx_tcp->seqnum) + (swap16(rx_tcp->ipv4.total_length) - 52), TCP_ACK, 512, 0, 0);
+                                     swap32(rx_tcp->acknum), swap32(rx_tcp->seqnum) + (swap16(rx_tcp->ipv4.total_length) - 52) - 1, TCP_ACK, 512, 0, 0);
                         char pseudo_header[12];
                         create_pseudo_header(pseudo_header, rx_tcp->ipv4.dest_ip, rx_tcp->ipv4.src_ip, sizeof(tcp_packet) - sizeof(ipv4_packet));
                         tx_fin->checksum = checksum(pseudo_header, sizeof(pseudo_header)) +
