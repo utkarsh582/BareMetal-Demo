@@ -624,11 +624,6 @@
 // }
 #include "libBareMetal.h"
 
-#define PCI_CONFIG_ADDRESS 0xCF8
-#define PCI_CONFIG_DATA    0xCFC
-
-#define AHCI_BAR5_OFFSET   0x24
-#define AHCI_CAP           0x00 // Host Capabilities
 #define AHCI_PI            0x0C // Ports Implemented
 #define AHCI_PxSSTS        0x28 // Port x Serial ATA Status
 
@@ -673,28 +668,8 @@ void* memset(void* s, int c, int n)
 	return s;
 }
 
-static inline void outl(unsigned short port, unsigned int value) {
-    asm volatile ("outl %0, %1" : : "a"(value), "Nd"(port));
-}
-
-static inline unsigned int inl(unsigned short port) {
-    unsigned int value;
-    asm volatile ("inl %1, %0" : "=a"(value) : "Nd"(port));
-    return value;
-}
-
-unsigned int pci_config_read(unsigned int bus, unsigned int device, unsigned int function, unsigned int offset) {
-    unsigned int address = (1 << 31) | (bus << 16) | (device << 11) | (function << 8) | (offset & 0xFC);
-    outl(PCI_CONFIG_ADDRESS, address);
-    return inl(PCI_CONFIG_DATA);
-}
-
 unsigned int mmio_read32(unsigned long address) {
     return *(volatile unsigned int*)address;
-}
-
-static inline void mmio_write32(unsigned long address, unsigned int value) {
-    *(volatile unsigned int *)address = value; 
 }
 
 unsigned int find_ahci_base_address() {
@@ -751,10 +726,11 @@ void parse_sata_info(const u8* data, int port) {
 
     // If the serial number is empty, return without printing
     if (strlen(serial) == 0) {
+        print_port_message(port,"No Data Retrieved");
         return; // No meaningful data to display
     }
 
-    b_output("\n", 1);
+    // b_output("\n", 1);
     print_port_message(port,"Information of SATA device");
     // Print Serial Number
     b_output("Serial Number: ", strlen("Serial Number: "));
@@ -798,28 +774,54 @@ void parse_sata_info(const u8* data, int port) {
     itoa(size_gb, msg, 10);
     b_output(msg, strlen(msg));
     b_output(" GB)\n", 5); // Output " GB)"
+    b_output("\n", 1);
 }
 
 void detect_sata_devices(unsigned int ahci_base) {
     
-    // unsigned int pi = mmio_read32(ahci_base + AHCI_PI);
+    unsigned int pi = mmio_read32(ahci_base + AHCI_PI);
 
-    for (int port = 0; port < 32; port++) {
-               memset(buffer, 0, sizeof(buffer)); 
-        // if (pi & (1 << port)) { 
-        //     unsigned int ssts = mmio_read32(ahci_base + 0x100 + (port * 0x80) + AHCI_PxSSTS);
-        //     unsigned int det = ssts & 0xF;    
-        //     unsigned int ipm = (ssts >> 8) & 0xF;
+    // Output the value of PI for debugging
+    b_output("\nPorts Implemented (PI) Register: ", strlen("\nPorts Implemented (PI) Register: "));
+    char pi_str[9]; // Buffer for hexadecimal string (8 chars + null terminator)
+    itoa(pi, pi_str, 2);
+    b_output(pi_str, strlen(pi_str));
+    b_output("\n", 1);
 
-        //     if (det == 3 && ipm == 1) {
-        //         print_port_message(port, "SATA device detected.");
+    unsigned int pa = b_system(AHCI_PA, 0 , 0);
+    b_output("\nPorts Active (PA) Register: ", strlen("\nPorts Active (PA) Register: "));
+    char pa_str[32];
+    itoa(pa, pa_str, 2);
+    b_output(pa_str, strlen(pa_str));
+    b_output("\n",1);
+
+    for (int port = 0; port < 10; port++) {
+        memset(buffer, 0, sizeof(buffer)); 
+        if (pi & (1 << port)) { 
+            unsigned int ssts = mmio_read32(ahci_base + 0x100 + (port * 0x80) + AHCI_PxSSTS);
+            unsigned int det = ssts & 0xF;    
+            unsigned int ipm = (ssts >> 8) & 0xF;
+
+            b_output("\n", 1);
+
+            print_port_message(port, "Implemented Port.");
+
+            b_output("Sata Status (PxSSTS) Register: ", strlen("Sata Status (PxSSTS) Register: "));
+            char ssts_str[12];
+            itoa(ssts, ssts_str, 2);
+            b_output(ssts_str, strlen(ssts_str));
+            b_output("\n", 1);
+
+            if (det == 3 && ipm == 1) {
                 b_system_mem(AHCI_ID, (char*)buffer, port);
                 parse_sata_info((const u8*)buffer, port);
-        //     } else {
-        //         print_port_message(port, "No device or inactive port.");
-        //         b_output("\n",1);
-        //     }
-        // }
+            } else {
+                print_port_message(port, "No Active Device Found.");
+                // b_output("\n",1);
+            }
+        }else{
+            print_port_message(port, "Non - Implemented Port.");
+        }
     }
 }
 
