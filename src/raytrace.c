@@ -461,10 +461,28 @@ int strlen(const char* s)
 	return r;
 }
 
+void itoa(unsigned int value, char* str, int base) {
+    char* ptr = str;
+    char* end = str;
+    char digits[] = "0123456789ABCDEF";
+
+    do {
+        *end++ = digits[value % base];
+        value /= base;
+    } while (value);
+
+    *end-- = '\0';
+
+    while (ptr < end) {
+        char temp = *ptr;
+        *ptr++ = *end;
+        *end-- = temp;
+    }
+}
 
 void write_to_storage(void *mem, u64 start, u64 num, u64 drivenum) {
     u64 result = b_storage_write(mem, start, num, drivenum);
-    if (result == 512) {
+    if (result == num) {
         b_output("\nWrite operation successful.\n", (unsigned long)strlen("\nWrite operation successful.\n"));
     } else {
         b_output("\nWrite operation failed.\n", (unsigned long)strlen("\nWrite operation failed.\n"));
@@ -481,218 +499,34 @@ void read_from_storage(void *mem, u64 start, u64 num, u64 drivenum) {
 }
 
 int main() {
-    char buffer[512];
+    char buffer[4096];
 
-    // char data_to_write[] = "Hello, BareMetal OS Storage!";
+    // char data_to_write[] = "Hello, BareMetal OS Storage!Hello, BareMetal OS Storage!Hello, BareMetal OS Storage!Hello, BareMetal OS Storage!Hello, BareMetal OS Storage!Hello, BareMetal OS Storage!Hello, BareMetal OS Storage!";
 
     // for (int i = 0; i < sizeof(data_to_write); i++) {
     //     buffer[i] = data_to_write[i];
     // }
 
-    // write_to_storage(buffer, 0, sizeof(data_to_write), 1);
-    
-    for (u64 i = 0; i < 6; i++){
-        for (int i = 0; i < sizeof(buffer); i++) {
-            buffer[i] = 0;
-        }
-        read_from_storage(buffer, 0, 1, i);
-        b_output("Data read from storage: ", (unsigned long)strlen("Data read from storage: "));
-        b_output(buffer, sizeof(buffer));  
+    // for(int j=0;j<10;j++){
+    //     write_to_storage(buffer, j, 1, 0);
+    // }
+    b_output("\n", 1);
+    u64 lba=b_system(NVME_LBA, 0 , 0);
+
+    char lba_str[16];
+    itoa(lba, lba_str, 2);
+    b_output(lba_str, strlen(lba_str));
+    b_output("\n", 1);
+
+    for (int i = 0; i < sizeof(buffer); i++) {
+        buffer[i] = 0;
     }
+    read_from_storage(buffer, 0, 1, 0);
+    b_output("Data read from storage: ", (unsigned long)strlen("Data read from storage: "));
+    b_output(buffer, sizeof(buffer));
+    read_from_storage(buffer, 1, 1, 0);
+    b_output("Data read from storage: ", (unsigned long)strlen("Data read from storage: "));
+    b_output(buffer, sizeof(buffer));  
 
     return 0;
 }
-
-// #include "libBareMetal.h"
-
-// #define SECTOR_SIZE       512       // Sector size in bytes
-// #define PRDT_ENTRIES      1         // Number of PRDT entries
-// #define AHCI_CMD_READ     0x25      // READ DMA EXT command
-// #define FIS_TYPE_REG_H2D  0x27      // FIS Type: Host-to-Device Register FIS
-
-// // PRDT entry structure
-// struct prdt_entry {
-//     u64 base_addr;    // Data buffer base address
-//     u32 reserved;     // Reserved
-//     u32 flags_size;   // 31:0 = Byte Count; 31 = Interrupt
-// } __attribute__((packed));
-
-// // Command Table structure
-// struct command_table {
-//     u8  command_fis[64];          // Command FIS
-//     u8  atapi_command[16];        // ATAPI command (not used here)
-//     u8  reserved[48];             // Reserved
-//     struct prdt_entry prdt[PRDT_ENTRIES];  // PRDT entries
-// } __attribute__((packed));
-
-// // Command Header structure
-// struct command_header {
-//     u8  flags;          // Command flags
-//     u8  prdt_length;    // Number of PRDT entries
-//     u16 prdbc;          // Physical Region Descriptor Byte Count
-//     u64 ctba;           // Command Table Base Address
-//     u32 reserved[4];    // Reserved
-// } __attribute__((packed));
-
-// // MMIO functions for BareMetal OS
-// static inline void mmio_write32(u64 addr, u32 value) {
-//     *((volatile u32 *)addr) = value;
-// }
-
-// static inline u32 mmio_read32(u64 addr) {
-//     return *((volatile u32 *)addr);
-// }
-
-// int strlen(const char* s)
-// {
-// 	int r = 0;
-
-// 	for(; *s++ != 0; r++) { }
-
-// 	return r;
-// }
-
-// void itoa(unsigned int value, char* str, int base) {
-//     char* ptr = str;
-//     char* end = str;
-//     char digits[] = "0123456789ABCDEF";
-
-//     do {
-//         *end++ = digits[value % base];
-//         value /= base;
-//     } while (value);
-
-//     *end-- = '\0';
-
-//     while (ptr < end) {
-//         char temp = *ptr;
-//         *ptr++ = *end;
-//         *end-- = temp;
-//     }
-// }
-
-
-
-// // Find AHCI base address
-// unsigned int find_ahci_base_address() {
-//     unsigned int base_address = b_system(AHCI_BASE, 0, 0);
-
-//     if (base_address == 0 || base_address == 0xFFFFFFF0) {
-//         b_output("AHCI Base Address not found or invalid.\n", 
-//                  (unsigned long)strlen("AHCI Base Address not found or invalid.\n"));
-//         return 0;
-//     }
-
-//     b_output("\nAHCI Base Address: ", (unsigned long)strlen("\nAHCI Base Address: "));
-//     char address_str[12];
-//     itoa(base_address, address_str, 16);
-//     b_output(address_str, strlen(address_str));
-//     b_output("\n", 1);
-
-//     return base_address;
-// }
-
-// // Find Ports Active register
-// unsigned int get_ports_active() {
-//     unsigned int pa = b_system(AHCI_PA, 0, 0);
-//     b_output("\nPorts Active (PA) Register: ", strlen("\nPorts Active (PA) Register: "));
-//     char pa_str[32];
-//     itoa(pa, pa_str, 2);  // Convert to binary for clarity
-//     b_output(pa_str, strlen(pa_str));
-//     b_output("\n", 1);
-//     return pa;
-// }
-
-// // Prepare AHCI command table
-// void prepare_ahci_command(struct command_table *cmd_table, u64 buffer_addr, u32 sector_count) {
-//     cmd_table->prdt[0].base_addr = buffer_addr;
-//     cmd_table->prdt[0].flags_size = SECTOR_SIZE * sector_count | (1 << 31);  // Byte size + interrupt flag
-// }
-
-// // Issue AHCI READ command
-// void ahci_read(u32 port_base, u64 lba, u32 num_sectors, u64 buffer_addr) {
-//     // Locate the command header
-//     struct command_header *cmd_hdr = (struct command_header *)(uintptr_t)(port_base + 0x0);
-
-//     // Allocate and initialize the command table
-//     struct command_table *cmd_table = (struct command_table *)(cmd_hdr->ctba);
-//     prepare_ahci_command(cmd_table, buffer_addr, num_sectors);
-
-//     // Build the FIS (Frame Information Structure)
-//     cmd_table->command_fis[0] = FIS_TYPE_REG_H2D;  // FIS type: Host-to-Device
-//     cmd_table->command_fis[1] = (1 << 7);          // Command flag
-//     cmd_table->command_fis[2] = AHCI_CMD_READ;     // Command opcode
-//     cmd_table->command_fis[3] = (u8)(lba & 0xFF);
-//     cmd_table->command_fis[4] = (u8)((lba >> 8) & 0xFF);
-//     cmd_table->command_fis[5] = (u8)((lba >> 16) & 0xFF);
-//     cmd_table->command_fis[6] = (u8)((lba >> 24) & 0xFF);
-//     cmd_table->command_fis[7] = (u8)((lba >> 32) & 0xFF);
-//     cmd_table->command_fis[8] = (u8)((lba >> 40) & 0xFF);
-
-//     // Set up the command header
-//     cmd_hdr->flags = 0x5;  // Command length, prefetchable
-//     cmd_hdr->prdt_length = 1;  // One PRDT entry for simplicity
-
-//     // Clear port interrupt status
-//     mmio_write32(port_base + 0x10, 0xFFFFFFFF);
-
-//     // Issue the command
-//     mmio_write32(port_base + 0x18, mmio_read32(port_base + 0x18) | (1 << 0));
-
-//     // Wait for completion (simplified polling)
-//     while ((mmio_read32(port_base + 0x20) & 0x88) != 0);  // Wait until BSY and DRQ are clear
-// }
-
-// // Main function
-// int main() {
-//     // Find AHCI Base Address
-//     unsigned int ahci_base = find_ahci_base_address();
-//     if (ahci_base == 0) {
-//         return 1;  // Exit if AHCI base address is invalid
-//     }
-
-//     // Get Ports Active register
-//     unsigned int pa = get_ports_active();
-//     if (pa == 0) {
-//         b_output("No active ports found.\n", (unsigned long)strlen("No active ports found.\n"));
-//         return 1;
-//     }
-
-//     // Determine the first active port
-//     int port_number = -1;
-//     for (int i = 0; i < 32; i++) {
-//         if (pa & (1 << i)) {
-//             port_number = i;
-//             b_output("Using Port: ", (unsigned long)strlen("Using Port: "));
-//             char port_str[3];
-//             itoa(port_number, port_str, 10);
-//             b_output(port_str, strlen(port_str));
-//             b_output("\n", 1);
-
-//             // Calculate port base address
-//             u32 port_base = ahci_base + (0x100 * port_number);
-
-//             // Allocate buffer for reading
-//             static char buffer[SECTOR_SIZE] __attribute__((aligned(512)));
-
-//             // LBA (Logical Block Address) to read from
-//             u64 lba = 0;  // Starting sector
-//             u32 num_sectors = 1;  // Number of sectors to read
-
-//             // Read data from the SSD
-//             ahci_read(port_base, lba, num_sectors, (u64)buffer);
-
-//             // Output the read data
-//             b_output("Data read from storage: ", (unsigned long)strlen("Data read from storage: "));
-//             b_output(buffer, SECTOR_SIZE);
-//         }
-//     }
-
-//     if (port_number == -1) {
-//         b_output("No active port available for reading.\n", (unsigned long)strlen("No active port available for reading.\n"));
-//         return 1;
-//     }
-
-    
-//     return 0;
-// }

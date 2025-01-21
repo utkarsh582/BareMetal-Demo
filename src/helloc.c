@@ -95,6 +95,42 @@ typedef struct tcp_packet {
     u16 urg_pointer;
 } tcp_packet;
 
+
+#define SECTOR_SIZE 4096
+
+char sector_buffer[SECTOR_SIZE];
+unsigned int buffer_index = 0; // Tracks the current buffer index
+int starting_sector = 0; // Tracks the current sector for writing logs
+
+void write_sector_buffer() {
+    if (buffer_index > 0) {
+        char buffer[4096];
+        for (int i = 0; i < sizeof(sector_buffer); i++) {
+            buffer[i] = sector_buffer[i];
+        }
+        int i=starting_sector;
+        // b_output(buffer,sizeof(buffer));
+        b_storage_write(buffer, i, 1, 0); // Write one sector
+        starting_sector++; // Increment the starting sector
+        buffer_index = 0;  // Reset the buffer index
+        memset(buffer,0,sizeof(buffer));
+        memset(sector_buffer, 0, SECTOR_SIZE); // Clear the buffer
+    }
+}
+
+// Enhanced b_output function to log data
+void log_output(const char *data, unsigned long length) {
+    // Ensure all data fits in the buffer
+    for (unsigned long i = 0; i < length; i++) {
+        sector_buffer[buffer_index++] = data[i];
+        if (buffer_index == SECTOR_SIZE) {
+            write_sector_buffer(); // Flush buffer to disk when full
+        }
+    }
+    // Optionally send output to the standard b_output
+    b_output(data,length);
+}
+
 //Construction and Sending of ARP Request Packet
 void send_arp_request(u8* dest_ip, u8* dest_mac, u8* src_mac, u8* src_ip, u8* tosend) {
     arp_packet* tx_arp = (arp_packet*)tosend;
@@ -200,7 +236,7 @@ void send_syn_packet(u8 *tosend, u8 *src_ip, u8 *dst_ip, u16 dest_port) {
 
     // Send SYN packet
     net_send(tosend, sizeof(tcp_packet) + option_len);
-    b_output("SYN packet sent.\n", (unsigned long)strlen("SYN packet sent.\n"));
+    log_output("SYN packet sent.\n", (unsigned long)strlen("SYN packet sent.\n"));
 }
 
 // Function to convert u64 to a string (manual integer to string conversion)
@@ -223,16 +259,14 @@ void u64_to_str(u64 value, char* str) {
 }
 
 int main(){
-    b_output("\nminIP Client2.0\n", (unsigned long)strlen("\nminIP Client2.0\n"));
-
+    log_output("\nminIP Client2.0\n", (unsigned long)strlen("\nminIP Client2.0\n"));
     u64 time = b_system(TIMECOUNTER, 0, 0);
 
     char timeStr[32]; 
     u64_to_str(time, timeStr); 
 
-    b_output(timeStr, (unsigned long)strlen(timeStr)); 
-    b_output("Desired Time\n", (unsigned long)strlen("Desired Time\n")); 
-
+    log_output(timeStr, (unsigned long)strlen(timeStr)); 
+    log_output("Desired Time\n", (unsigned long)strlen("Desired Time\n")); 
     net_init();
 
     u16 dest_port = 8129;
@@ -241,8 +275,8 @@ int main(){
     
     // Send initial ARP request
     send_arp_request(server_ip, broadcast_mac, src_MAC, src_IP, tosend);
-    b_output("ARP Request Sent. Waiting for Reply\n", (unsigned long)strlen("ARP Request Sent. Waiting for Reply\n"));
-
+    log_output("ARP Request Sent. Waiting for Reply\n", (unsigned long)strlen("ARP Request Sent. Waiting for Reply\n"));
+    
     // Receive ARP reply
     while (1) {
         recv_packet_len = net_recv(buffer);
@@ -252,9 +286,9 @@ int main(){
             arp_packet* rx_arp = (arp_packet*)buffer;
             if (swap16(rx_arp->opcode) == ARP_REPLY) {
                 if (memcmp(server_ip, rx_arp->sender_ip, 4) == 0) {
-                    b_output("ARP Packet Received\n", (unsigned long)strlen("ARP Packet Received\n"));
+                    log_output("ARP Packet Received\n", (unsigned long)strlen("ARP Packet Received\n"));
                     memcpy(dst_MAC, rx_arp->sender_mac, 6);
-                    b_output("Server MAC Address obtained.\n", (unsigned long)strlen("Server MAC Address obtained.\n"));
+                    log_output("Server MAC Address obtained.\n", (unsigned long)strlen("Server MAC Address obtained.\n"));
                     break;
                 } else {
                     // Send ARP request again if the response is not from the correct server
@@ -288,7 +322,7 @@ int main(){
                                         checksum((u8*)tx_ack + sizeof(ipv4_packet), sizeof(tcp_packet) - sizeof(ipv4_packet));
                         //Send ACK packet
                         net_send(tosend, sizeof(tcp_packet));
-                        b_output("Connection Established\n", (unsigned long)strlen("Connection Established\n"));
+                        log_output("Connection Established\n", (unsigned long)strlen("Connection Established\n"));
 
                         // b_system(DELAY, 10000000, 0);
 
@@ -305,8 +339,7 @@ int main(){
                         memcpy((u8*)tx_psh + sizeof(tcp_packet), input, payload_len);
                         // Send the packet
                         net_send(tosend, sizeof(tcp_packet) + payload_len);
-                        b_output("Message Sent\n", (unsigned long)strlen("Message Sent\n"));
-
+                        log_output("Message Sent\n", (unsigned long)strlen("Message Sent\n"));
                         // b_system(DELAY, 10000000, 0);
 
                         //Building the Message Packet and Sending to server
@@ -322,7 +355,7 @@ int main(){
                         // memcpy((u8*)tx_psh1 + sizeof(tcp_packet), input1, payload_len1);
                         // // Send the packet
                         // net_send(tosend, sizeof(tcp_packet) + payload_len1);
-                        // b_output("Second Message Sent\n", (unsigned long)strlen("Second Message Sent\n"));
+                        // log_output("Second Message Sent\n", (unsigned long)strlen("Second Message Sent\n"));
                     }else if((rx_tcp->flags & (TCP_PSH | TCP_ACK)) == (TCP_PSH | TCP_ACK)){
                         //Building ACK Packet for Message Packet for Server
                         tcp_packet* tx_ack = (tcp_packet*)tosend;
@@ -334,11 +367,11 @@ int main(){
                                         checksum((u8*)tx_ack + sizeof(ipv4_packet), sizeof(tcp_packet) - sizeof(ipv4_packet));
                         //Send the Packet
                         net_send(tosend, sizeof(tcp_packet));
-                        b_output("Ack Sent\n", (unsigned long)strlen("Ack Sent\n"));
+                        log_output("Ack Sent\n", (unsigned long)strlen("Ack Sent\n"));
 
                         //Printing Message from Server
                         char* message = (char*)rx_tcp + sizeof(tcp_packet) + 12;
-						b_output(message,(unsigned long)strlen(message));
+						log_output(message,(unsigned long)strlen(message));
 
                         //Building the Message Packet and Sending to server
                         char* input1 = "Hello from the client";
@@ -353,7 +386,7 @@ int main(){
                         memcpy((u8*)tx_psh1 + sizeof(tcp_packet), input1, payload_len1);
                         // Send the packet
                         net_send(tosend, sizeof(tcp_packet) + payload_len1);
-                        b_output("Message Sent\n", (unsigned long)strlen("Message Sent\n"));
+                        log_output("Message Sent\n", (unsigned long)strlen("Message Sent\n"));
 
                         //Building FIN packet for terminating Connection with Server
                         // tcp_packet* tx_fin = (tcp_packet*)tosend;
@@ -365,7 +398,7 @@ int main(){
                         //                 checksum((u8*)tx_fin + sizeof(ipv4_packet), sizeof(tcp_packet) - sizeof(ipv4_packet));
                         // // Send the ACK packet
                         // net_send(tosend, sizeof(tcp_packet));
-                        // b_output("Connection Break Request.\n", (unsigned long)strlen("Connection Break Request.\n"));
+                        // log_output("Connection Break Request.\n", (unsigned long)strlen("Connection Break Request.\n"));
                     }else if((rx_tcp->flags & (TCP_FIN | TCP_ACK)) == (TCP_FIN | TCP_ACK)){
                         //Building ACK packet for FIN-ACK by Server
                         tcp_packet* tx_fin = (tcp_packet*)tosend;
@@ -377,14 +410,15 @@ int main(){
                                         checksum((u8*)tx_fin + sizeof(ipv4_packet), sizeof(tcp_packet) - sizeof(ipv4_packet));
                         //Send ACK packet
                         net_send(tosend, sizeof(tcp_packet));
-                        b_output("Connection Terminated\n", (unsigned long)strlen("Connection terminated\n"));
+                        log_output("Connection Terminated\n", (unsigned long)strlen("Connection terminated\n"));
                         break;
                     }
                 }
             }
         }
     }
-    b_output("Done successfully\n", (unsigned long)strlen("Done successfully\n"));
+    log_output("Done successfully\n", (unsigned long)strlen("Done successfully\n"));
+    write_sector_buffer();
     net_exit();
 
     return 0;

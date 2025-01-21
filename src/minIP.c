@@ -724,14 +724,13 @@ void parse_sata_info(const u8* data, int port) {
         serial[i + 1] = data[20 + i]; // Low byte
     }
 
-    // If the serial number is empty, return without printing
     if (strlen(serial) == 0) {
-        print_port_message(port,"No Data Retrieved");
-        return; // No meaningful data to display
+        print_port_message(port, "No Data Retrieved");
+        return;
     }
 
-    // b_output("\n", 1);
-    print_port_message(port,"Information of SATA device");
+    print_port_message(port, "Information of SATA device");
+
     // Print Serial Number
     b_output("Serial Number: ", strlen("Serial Number: "));
     b_output(serial, strlen(serial));
@@ -744,7 +743,6 @@ void parse_sata_info(const u8* data, int port) {
         model[i + 1] = data[54 + i];
     }
 
-    // Print Model Number
     b_output("Model: ", strlen("Model: "));
     b_output(model, strlen(model));
     b_output("\n", 1);
@@ -756,24 +754,24 @@ void parse_sata_info(const u8* data, int port) {
         firmware[i + 1] = data[46 + i];
     }
 
-    // Print Firmware Revision
     b_output("Firmware: ", strlen("Firmware: "));
     b_output(firmware, strlen(firmware));
     b_output("\n", 1);
 
     // User Addressable Sectors (Word 60–61)
-    unsigned int sectors = data[120] | (data[121] << 8) | (data[122] << 16) | (data[123] << 24);
-    unsigned int size_mb = sectors / 2048; // Convert to MB
-    unsigned int size_gb = sectors / 2097152; // Convert to GB (1 GB = 2^21 sectors)
+    unsigned int sectors = (data[120] | (data[121] << 8)) | ((data[122] | (data[123] << 8)) << 16);
+    unsigned long long capacity_bytes = (unsigned long long)sectors * 512; // Sectors * 512 bytes
+    unsigned int size_mb = capacity_bytes / (1024 * 1024); // Convert to MB
+    unsigned int size_gb = size_mb / 1024; // Convert to GB
 
     // Print Capacity
     itoa(size_mb, msg, 10);
     b_output("Capacity: ", strlen("Capacity: "));
     b_output(msg, strlen(msg));
-    b_output(" MB (", 5); // Output " MB ("
+    b_output(" MB (", 5);
     itoa(size_gb, msg, 10);
     b_output(msg, strlen(msg));
-    b_output(" GB)\n", 5); // Output " GB)"
+    b_output(" GB)\n", 5);
     b_output("\n", 1);
 }
 
